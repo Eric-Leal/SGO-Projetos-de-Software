@@ -1,0 +1,212 @@
+@startuml
+title Sistema de Gestão das Olimpíadas (SGO)
+
+actor Atleta as A
+actor Organizador as O
+participant "usuario-service" as US
+participant "competicao-service" as CS
+participant "relatorio-service" as RS
+participant "notificacao-service" as NS
+queue "fila-competicao" as FC
+queue "fila-notificacao" as FN
+database "RDS\nUsuários" as RU
+database "RDS\nCompetições" as RC
+database "DynamoDB\nRelatórios" as DR
+database "DynamoDB\nNotificações" as DN
+
+== 1. Autenticação ==
+
+A -> US: 1.1 login(email, senha)
+activate US
+US -> RU: 1.2 buscarUsuario(email)
+activate RU
+RU --> US: 1.3 dadosUsuario
+deactivate RU
+alt Credenciais inválidas
+    US --> A: 1.4 erroAutenticacao()
+else Credenciais válidas
+    US --> A: 1.5 tokenAcesso(jwt)
+end
+deactivate US
+
+== 2. Cadastro de Atleta ==
+
+A -> US: 2.1 cadastrarAtleta(nome, email, pais, dataNascimento, modalidade, genero, altura, peso)
+activate US
+US -> RU: 2.2 verificarEmailExistente(email)
+activate RU
+RU --> US: 2.3 resultado
+deactivate RU
+alt Email já cadastrado
+    US --> A: 2.4 erroEmailDuplicado()
+else Email disponível
+    US -> RU: 2.5 salvarAtleta(dadosAtleta)
+    activate RU
+    RU --> US: 2.6 atletaCadastrado(atletaID)
+    deactivate RU
+    US --> A: 2.7 confirmacaoCadastro(atletaID)
+end
+deactivate US
+
+== 3. Cadastro de Competição e Alocação de Local ==
+
+O -> CS: 3.1 cadastrarCompeticao(nomeModalidade, data, horario, localID)
+activate CS
+CS -> RC: 3.2 verificarDisponibilidadeLocal(localID, data, horario)
+activate RC
+RC --> CS: 3.3 disponibilidade
+deactivate RC
+alt Local indisponível
+    CS --> O: 3.4 erroLocalIndisponivel(localID)
+else Local disponível
+    CS -> RC: 3.5 salvarCompeticao(dadosCompeticao)
+    activate RC
+    RC --> CS: 3.6 competicaoCadastrada(competicaoID)
+    deactivate RC
+    CS -> FC: 3.7 publicarEventoCompeticaoCriada(competicaoID)
+    activate FC
+    FC --> CS: 3.8 eventoPublicado
+    deactivate FC
+    CS --> O: 3.9 confirmacaoCadastro(competicaoID)
+end
+deactivate CS
+
+== 4. Inscrição de Atleta em Competição ==
+
+A -> CS: 4.1 consultarCompetições()
+activate CS
+CS -> RC: 4.2 buscarCompeticoesAtivas()
+activate RC
+RC --> CS: 4.3 listaCompeticoes
+deactivate RC
+CS --> A: 4.4 listaCompeticoes
+deactivate CS
+
+A -> CS: 4.5 inscreverEmCompeticao(atletaID, competicaoID)
+activate CS
+CS -> RC: 4.6 verificarInscricaoExistente(atletaID, competicaoID)
+activate RC
+RC --> CS: 4.7 resultado
+deactivate RC
+alt Atleta já inscrito
+    CS --> A: 4.8 erroInscricaoDuplicada()
+else Inscrição permitida
+    CS -> RC: 4.9 salvarInscricao(atletaID, competicaoID)
+    activate RC
+    RC --> CS: 4.10 inscricaoSalva(inscricaoID)
+    deactivate RC
+    CS ->> FN: 4.11 publicarEventoInscricaoConfirmada(atletaID, competicaoID)
+    activate FN
+    FN ->> NS: 4.12 consumirEventoInscricao(atletaID, competicaoID)
+    deactivate FN
+    activate NS
+    NS -> DN: 4.13 salvarNotificacao(atletaID, mensagem)
+    activate DN
+    DN --> NS: 4.14 notificacaoSalva
+    deactivate DN
+    NS ->> A: 4.15 notificarInscricaoConfirmada(competicaoID)
+    deactivate NS
+    CS --> A: 4.16 confirmacaoInscricao(inscricaoID)
+end
+deactivate CS
+
+== 5. Cancelamento de Inscrição ==
+
+A -> CS: 5.1 visualizarInscricoes(atletaID)
+activate CS
+CS -> RC: 5.2 buscarInscricoes(atletaID)
+activate RC
+RC --> CS: 5.3 listaInscricoes
+deactivate RC
+CS --> A: 5.4 listaInscricoes
+deactivate CS
+
+A -> CS: 5.5 cancelarInscricao(inscricaoID)
+activate CS
+CS -> RC: 5.6 buscarInscricao(inscricaoID)
+activate RC
+RC --> CS: 5.7 dadosInscricao
+deactivate RC
+alt Competição já iniciada
+    CS --> A: 5.8 erroCancelamentoNaoPermitido()
+else Cancelamento permitido
+    CS -> RC: 5.9 atualizarStatusInscricao(inscricaoID, "CANCELADA")
+    activate RC
+    RC --> CS: 5.10 inscricaoAtualizada
+    deactivate RC
+    CS --> A: 5.11 confirmacaoCancelamento(inscricaoID)
+end
+deactivate CS
+
+== 6. Registro de Classificação ==
+
+O -> CS: 6.1 registrarClassificacao(competicaoID, atletaOuro, atletaPrata, atletaBronze)
+activate CS
+CS -> RC: 6.2 verificarCompeticao(competicaoID)
+activate RC
+RC --> CS: 6.3 dadosCompeticao
+deactivate RC
+CS -> RC: 6.4 salvarClassificacao(dadosClassificacao)
+activate RC
+RC --> CS: 6.5 classificacaoSalva(classificacaoID)
+deactivate RC
+CS ->> FC: 6.6 publicarEventoResultadoRegistrado(competicaoID, classificacaoID)
+activate FC
+FC ->> RS: 6.7 consumirEventoResultado(competicaoID)
+deactivate FC
+activate RS
+RS -> RC: 6.8 buscarDadosCompeticao(competicaoID)
+activate RC
+RC --> RS: 6.9 dadosCompeticao
+deactivate RC
+RS -> DR: 6.10 atualizarRelatorioMedalhas(paisID, tipoMedalha)
+activate DR
+DR --> RS: 6.11 relatorioAtualizado
+deactivate DR
+deactivate RS
+CS --> O: 6.12 confirmacaoRegistro(classificacaoID)
+deactivate CS
+
+== 7. Cancelamento de Competição ==
+
+O -> CS: 7.1 cancelarCompeticao(competicaoID)
+activate CS
+CS -> RC: 7.2 buscarCompeticao(competicaoID)
+activate RC
+RC --> CS: 7.3 dadosCompeticao
+deactivate RC
+CS -> RC: 7.4 atualizarStatusCompeticao(competicaoID, "CANCELADA")
+activate RC
+RC --> CS: 7.5 statusAtualizado
+deactivate RC
+CS ->> FN: 7.6 publicarEventoCompeticaoCancelada(competicaoID)
+activate FN
+FN ->> NS: 7.7 consumirEventoCancelamento(competicaoID)
+deactivate FN
+activate NS
+NS -> RC: 7.8 buscarAtletasInscritos(competicaoID)
+activate RC
+RC --> NS: 7.9 listaAtletas
+deactivate RC
+loop Para cada atleta inscrito
+    NS -> DN: 7.10 salvarNotificacao(atletaID, mensagem)
+    activate DN
+    DN --> NS: 7.11 notificacaoSalva
+    deactivate DN
+    NS ->> A: 7.12 notificarCancelamentoCompeticao(competicaoID)
+end
+deactivate NS
+CS --> O: 7.13 confirmacaoCancelamento(competicaoID)
+deactivate CS
+
+== 8. Geração de Relatório de Medalhas ==
+
+O -> RS: 8.1 gerarRelatorioMedalhas()
+activate RS
+RS -> DR: 8.2 buscarDadosMedalhas()
+activate DR
+DR --> RS: 8.3 dadosMedalhas
+deactivate DR
+RS --> O: 8.4 relatorioMedalhas(listaPaises, totalMedalhas)
+deactivate RS
+@enduml
